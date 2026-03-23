@@ -1,8 +1,9 @@
-use std::collections::VecDeque;
 use std::env;
 use std::ffi::OsStr;
 
+use futures::future::join_all;
 use tokio::process::Command;
+use tokio::task::JoinHandle;
 
 /// Print usage and exit.
 fn usage() -> ! {
@@ -16,33 +17,32 @@ fn usage() -> ! {
         <lens>                  Original lens\n\
         <file…>                 One or more image files to modify\n\
         \n\
-        The date will overwrite the `DateTimeOriginal` tag, while the rest of the fields will overwrite\n\
-        the `UserComment` tag separated by `;`. The `@` character is a convention and meant to be used as\n\
+        The date will overwrite the `DateTimeOriginal` tag starting at time 00:00:00 and incremeting\n\
+        by 1 second in order of the filnames, while the rest of the fields will overwrite the\n\
+        `UserComment` tag separated by `;`. The `@` character is a convention and meant to be used as\n\
         a marker that the following numeric token is an ISO identifier allowing you to provide\n\
         \"shot at\" and \"processed at\" ISO values."
     );
     std::process::exit(1);
 }
 
+// TODO: Add option to update corresponding .xmp files: sed -i 's/exif:DateTimeOriginal="[^"]*"/exif:DateTimeOriginal="2025:11:10 00:00:00"/g' *.xmp
+
 /// Write EXIF tags using exiftool.
-async fn write_exif_tags<I>(
-    files: I,
+async fn write_exif_tags<T>(
+    file: T,
     date_time_original: &str,
     user_comment: &str,
 ) -> std::io::Result<()>
 where
-    I: IntoIterator,
-    I::Item: AsRef<OsStr>,
+    T: AsRef<OsStr>,
 {
     let mut cmd = Command::new("exiftool");
 
     cmd.arg("-overwrite_original")
         .arg(format!("-DateTimeOriginal={}", date_time_original))
-        .arg(format!("-UserComment={}", user_comment));
-
-    for file in files {
-        cmd.arg(file);
-    }
+        .arg(format!("-UserComment={}", user_comment))
+        .arg(file);
 
     let status = cmd.status().await?;
 
@@ -58,27 +58,69 @@ where
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    let mut args: VecDeque<String> = env::args().skip(1).collect();
+    let args: Vec<String> = env::args().skip(1).collect();
     if args.len() < 6 {
         usage();
     }
 
-    let date = args.pop_front().unwrap();
-    let film = args.pop_front().unwrap();
-    let process = args.pop_front().unwrap();
-    let camera = args.pop_front().unwrap();
-    let lens = args.pop_front().unwrap();
+    let date = args.get(0).unwrap().clone();
+    let comment = {
+        let film = args.get(1).unwrap();
+        let process = args.get(2).unwrap();
+        let camera = args.get(3).unwrap();
+        let lens = args.get(4).unwrap();
 
-    // Remaining arguments are file paths.
-    if args.is_empty() {
-        eprintln!("No image files supplied.");
-        std::process::exit(1);
-    }
+        format!("{};{};{};{}", film, process, camera, lens)
+    };
 
-    let original_date_time = format!("{} 00:00:00", date);
-    let comment = format!("{};{};{};{}", film, process, camera, lens);
-    match write_exif_tags(&args, &original_date_time, &comment).await {
-        Ok(_) => println!("OK"),
-        Err(err) => println!("Error: {}", err),
-    }
+    let mut files = args[5..].to_vec();
+    files.sort_by(|a, b| a.cmp(b));
+
+    let handles: Vec<JoinHandle<_>> = files
+        .into_iter()
+        .enumerate()
+        .map(|(i, file)| {
+            let original_date_time = format!("{} {}", date, seconds_to_time(i));
+            let comment = comment.clone();
+
+            tokio::spawn(async move {
+                match write_exif_tags(&file, &original_date_time, &comment).await {
+                    Ok(_) => {
+                        println!("OK: {}", file);
+                        Ok(())
+                    }
+                    Err(err) => {
+                        println!("Error: {}", err);
+                        Err(err)
+                    }
+                }
+            })
+        })
+        .collect();
+
+    // Wait for all tasks to finish
+    let results = join_all(handles).await;
+
+    // Count successes
+    let success_count = results.iter().filter(|r| r.is_ok()).count();
+    let total_count = results.len();
+
+    println!("\n--- Summary ---");
+    println!(
+        "Successfully wrote tags to {} of {} files.",
+        success_count, total_count
+    );
+}
+
+fn seconds_to_time(total_seconds: usize) -> String {
+    // Ensure we don't exceed 24 hours (86400 seconds)
+    // If the input represents seconds past midnight, we usually want to wrap around
+    let seconds_in_day = total_seconds % 86_400;
+
+    let hours = seconds_in_day / 3600;
+    let remaining = seconds_in_day % 3600;
+    let minutes = remaining / 60;
+    let seconds = remaining % 60;
+
+    format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
 }

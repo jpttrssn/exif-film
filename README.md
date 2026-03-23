@@ -15,8 +15,9 @@ exif-film <year>::<month>::<day> <film> <process> <camera> <lens> <file1> [file2
 <lens>                  Original lens
 <file…>                 One or more image files to modify
 
-The date will overwrite the `DateTimeOriginal` tag, while the rest of the fields will overwrite
-the `UserComment` tag separated by `;`. The `@` character is a convention and meant to be used as
+```
+The date will overwrite the `DateTimeOriginal` tag starting at time 00:00:00 and incremeting
+by 1 second in order of the filenames, while the rest of the fields will overwrite the
+`UserComment` tag separated by `;`. The `@` character is a convention and meant to be used as
 a marker that the following numeric token is an ISO identifier allowing you to provide
 "shot at" and "processed at" ISO values.
-```
