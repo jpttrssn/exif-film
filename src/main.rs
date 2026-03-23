@@ -21,12 +21,13 @@ fn usage() -> ! {
         by 1 second in order of the filnames, while the rest of the fields will overwrite the\n\
         `UserComment` tag separated by `;`. The `@` character is a convention and meant to be used as\n\
         a marker that the following numeric token is an ISO identifier allowing you to provide\n\
-        \"shot at\" and \"processed at\" ISO values."
+        \"shot at\" and \"processed at\" ISO values.\n\
+        \n\
+        Will also update the `DateTimeOriginal` in any correspodning `XMP` sidecar files. You may need\n\
+        to re-import your photos into which ever photo library you use afterwards."
     );
     std::process::exit(1);
 }
-
-// TODO: Add option to update corresponding .xmp files: sed -i 's/exif:DateTimeOriginal="[^"]*"/exif:DateTimeOriginal="2025:11:10 00:00:00"/g' *.xmp
 
 /// Write EXIF tags using exiftool.
 async fn write_exif_tags<T>(
@@ -53,6 +54,31 @@ where
             std::io::ErrorKind::Other,
             "exiftool returned non‑zero status",
         ))
+    }
+}
+
+/// Update xmp file if it exists
+async fn update_xmp<T>(file: T, date_time_original: &str)
+where
+    T: AsRef<OsStr>,
+{
+    let mut cmd = Command::new("sed");
+
+    let mut xmp = file.as_ref().to_os_string();
+    xmp.push(".xmp");
+
+    let sed_status = cmd
+        .arg("-i")
+        .arg(format!(
+            "s/exif:DateTimeOriginal=\"[^\"]*\"/exif:DateTimeOriginal=\"{}\"/g",
+            date_time_original
+        ))
+        .arg(&xmp)
+        .status()
+        .await;
+
+    if let Some(_) = sed_status.ok() {
+        println!("Updated XMP: {}", xmp.display());
     }
 }
 
@@ -87,6 +113,7 @@ async fn main() {
                 match write_exif_tags(&file, &original_date_time, &comment).await {
                     Ok(_) => {
                         println!("OK: {}", file);
+                        update_xmp(&file, &original_date_time).await;
                         Ok(())
                     }
                     Err(err) => {

@@ -21,3 +21,6 @@ by 1 second in order of the filenames, while the rest of the fields will overwri
 `UserComment` tag separated by `;`. The `@` character is a convention and meant to be used as
 a marker that the following numeric token is an ISO identifier allowing you to provide
 "shot at" and "processed at" ISO values.
+
+Will also update the `DateTimeOriginal` in any correspodning `XMP` sidecar files. You may need
+to re-import your photos into which ever photo library you use afterwards.
